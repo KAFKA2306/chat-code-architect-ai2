@@ -21,12 +21,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         if (message.type === 'chat') {
           // Handle real-time chat messages
-          const response = await generateChatResponse(message.content, message.context);
+          const response = await generateChatResponse({
+            userMessage: message.content,
+            sessionId: message.sessionId || 0,
+            projectContext: message.context
+          });
           
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({
               type: 'chat_response',
-              content: response,
+              content: response.content,
+              metadata: response.metadata,
               timestamp: new Date().toISOString()
             }));
           }
@@ -170,8 +175,55 @@ export async function registerRoutes(app: Express): Promise<Server> {
         sessionId
       });
       
-      const message = await storage.createChatMessage(messageData);
-      res.status(201).json(message);
+      // Create user message
+      const userMessage = await storage.createChatMessage(messageData);
+      
+      // If it's a user message, generate AI response
+      if (messageData.type === 'user') {
+        try {
+          // Get chat session to understand context
+          const session = await storage.getChatSession(sessionId);
+          let projectContext = null;
+          
+          if (session?.projectId) {
+            const project = await storage.getProject(session.projectId);
+            projectContext = project;
+          }
+          
+          // Generate AI response
+          const aiResponse = await generateChatResponse({
+            userMessage: messageData.content,
+            sessionId,
+            projectContext
+          });
+          
+          // Create AI response message
+          const aiMessageData = {
+            sessionId,
+            type: 'assistant' as const,
+            content: aiResponse.content,
+            metadata: aiResponse.metadata
+          };
+          
+          const aiMessage = await storage.createChatMessage(aiMessageData);
+          
+          // Return both messages
+          res.status(201).json({
+            userMessage,
+            aiMessage
+          });
+        } catch (aiError) {
+          console.error('AI response generation error:', aiError);
+          // Still return the user message even if AI fails
+          res.status(201).json({
+            userMessage,
+            error: 'AI response generation failed'
+          });
+        }
+      } else {
+        // For non-user messages, just return the created message
+        res.status(201).json({ userMessage });
+      }
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ error: 'Invalid message data', details: error.errors });
