@@ -7,13 +7,8 @@ export default defineConfig({
   plugins: [
     react(),
     runtimeErrorOverlay(),
-    ...(process.env.NODE_ENV !== "production" &&
-    process.env.REPL_ID !== undefined
-      ? [
-          await import("@replit/vite-plugin-cartographer").then((m) =>
-            m.cartographer(),
-          ),
-        ]
+    ...(process.env.NODE_ENV !== "production" && process.env.REPL_ID !== undefined
+      ? [(await import("@replit/vite-plugin-cartographer")).cartographer()]
       : []),
   ],
   resolve: {
@@ -27,6 +22,10 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    target: "esnext",
+    rollupOptions: {
+      external: ["@babel/preset-typescript/package.json", "../pkg"],
+    },
   },
   server: {
     fs: {
