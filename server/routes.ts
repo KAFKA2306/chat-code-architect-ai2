@@ -1,10 +1,25 @@
-import type { Express } from "express";
+import type { Express, Request, Response, NextFunction } from "express"; // Request, Response, NextFunctionをインポート
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { generateCode, generateChatResponse } from "./openai";
-import { insertChatMessageSchema, insertChatSessionSchema, insertProjectSchema, insertGeneratedFileSchema } from "@shared/schema";
+import { insertChatMessageSchema, insertChatSessionSchema, insertProjectSchema, insertGeneratedFileSchema, insertUserSchema } from "@shared/schema"; // insertUserSchemaを追加
 import { z } from "zod";
+import bcrypt from "bcrypt"; // bcryptをインポート
+
+// express-sessionの型定義を拡張
+declare module "express-session" {
+  interface SessionData {
+    userId: number;
+  }
+}
+
+export const isAuthenticated = (req: Request, res: Response, next: NextFunction) => {
+  if (req.session && req.session.userId) {
+    return next();
+  }
+  res.status(401).json({ message: "Unauthorized" });
+};
 
 export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
@@ -47,230 +62,370 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
 
-  // API Routes
+ // API Routes
 
-  // User routes
-  app.get('/api/users/:id', async (req, res) => {
-    try {
-      const userId = parseInt(req.params.id);
-      const user = await storage.getUser(userId);
-      if (!user) {
-        return res.status(404).json({ error: 'User not found' });
-      }
-      res.json(user);
-    } catch (error) {
-      console.error('Get user error:', error);
-      res.status(500).json({ error: 'Failed to fetch user' });
-    }
-  });
+ // Auth routes
+ app.post("/api/register", async (req, res) => {
+   try {
+     const { username, email, password } = insertUserSchema.parse(req.body);
 
-  // Project routes
-  app.get('/api/projects', async (req, res) => {
-    try {
-      const userId = parseInt(req.query.userId as string);
-      if (!userId) {
-        return res.status(400).json({ error: 'User ID is required' });
-      }
-      
-      const projects = await storage.getProjectsByUser(userId);
-      res.json(projects);
-    } catch (error) {
-      console.error('Get projects error:', error);
-      res.status(500).json({ error: 'Failed to fetch projects' });
-    }
-  });
+     const hashedPassword = await bcrypt.hash(password, 10);
+     const user = await storage.createUser({
+       username,
+       email,
+       password: hashedPassword,
+     });
 
-  app.post('/api/projects', async (req, res) => {
-    try {
-      const projectData = insertProjectSchema.parse(req.body);
-      const project = await storage.createProject(projectData);
-      res.status(201).json(project);
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: 'Invalid project data', details: error.errors });
-      }
-      console.error('Create project error:', error);
-      res.status(500).json({ error: 'Failed to create project' });
-    }
-  });
+     req.session.userId = user.id;
+     res.status(201).json({ message: "User registered successfully", user });
+   } catch (error) {
+     if (error instanceof z.ZodError) {
+       return res
+         .status(400)
+         .json({ error: "Invalid user data", details: error.errors });
+     }
+     console.error("Register error:", error);
+     res.status(500).json({ error: "Failed to register user" });
+   }
+ });
 
-  app.get('/api/projects/:id', async (req, res) => {
-    try {
-      const projectId = parseInt(req.params.id);
-      const project = await storage.getProject(projectId);
-      if (!project) {
-        return res.status(404).json({ error: 'Project not found' });
-      }
-      res.json(project);
-    } catch (error) {
-      console.error('Get project error:', error);
-      res.status(500).json({ error: 'Failed to fetch project' });
-    }
-  });
+ app.post("/api/login", async (req, res) => {
+   try {
+     const { email, password } = req.body;
 
-  app.put('/api/projects/:id', async (req, res) => {
-    try {
-      const projectId = parseInt(req.params.id);
-      const updates = req.body;
-      const project = await storage.updateProject(projectId, updates);
-      res.json(project);
-    } catch (error) {
-      console.error('Update project error:', error);
-      res.status(500).json({ error: 'Failed to update project' });
-    }
-  });
+     const user = await storage.getUserByEmail(email);
+     if (!user) {
+       return res.status(400).json({ error: "Invalid credentials" });
+     }
 
-  // Chat session routes
-  app.get('/api/chat-sessions', async (req, res) => {
-    try {
-      const userId = parseInt(req.query.userId as string);
-      if (!userId) {
-        return res.status(400).json({ error: 'User ID is required' });
-      }
-      
-      const sessions = await storage.getChatSessionsByUser(userId);
-      res.json(sessions);
-    } catch (error) {
-      console.error('Get chat sessions error:', error);
-      res.status(500).json({ error: 'Failed to fetch chat sessions' });
-    }
-  });
+     const isMatch = await bcrypt.compare(password, user.password);
+     if (!isMatch) {
+       return res.status(400).json({ error: "Invalid credentials" });
+     }
 
-  app.post('/api/chat-sessions', async (req, res) => {
-    try {
-      const sessionData = insertChatSessionSchema.parse(req.body);
-      const session = await storage.createChatSession(sessionData);
-      res.status(201).json(session);
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: 'Invalid session data', details: error.errors });
-      }
-      console.error('Create chat session error:', error);
-      res.status(500).json({ error: 'Failed to create chat session' });
-    }
-  });
+     req.session.userId = user.id;
+     res.json({ message: "Logged in successfully", user });
+   } catch (error) {
+     console.error("Login error:", error);
+     res.status(500).json({ error: "Failed to login" });
+   }
+ });
 
-  // Chat message routes
-  app.get('/api/chat-sessions/:sessionId/messages', async (req, res) => {
-    try {
-      const sessionId = parseInt(req.params.sessionId);
-      const messages = await storage.getChatMessagesBySession(sessionId);
-      res.json(messages);
-    } catch (error) {
-      console.error('Get chat messages error:', error);
-      res.status(500).json({ error: 'Failed to fetch chat messages' });
-    }
-  });
+ app.post("/api/logout", (req, res) => {
+   req.session.destroy((err) => {
+     if (err) {
+       return res.status(500).json({ message: "Failed to log out" });
+     }
+     res.clearCookie("connect.sid"); // セッションクッキーをクリア
+     res.json({ message: "Logged out successfully" });
+   });
+ });
 
-  app.post('/api/chat-sessions/:sessionId/messages', async (req, res) => {
-    try {
-      const sessionId = parseInt(req.params.sessionId);
-      const messageData = insertChatMessageSchema.parse({
-        ...req.body,
-        sessionId
-      });
-      
-      const message = await storage.createChatMessage(messageData);
-      res.status(201).json(message);
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        return res.status(400).json({ error: 'Invalid message data', details: error.errors });
-      }
-      console.error('Create chat message error:', error);
-      res.status(500).json({ error: 'Failed to create chat message' });
-    }
-  });
+ app.get("/api/current-user", (req, res) => {
+   if (req.session && req.session.userId) {
+     res.json({ userId: req.session.userId });
+   } else {
+     res.status(401).json({ message: "Not authenticated" });
+   }
+ });
 
-  // Code generation endpoint
-  app.post('/api/generate-code', async (req, res) => {
-    try {
-      const { prompt, techStack, projectType, context, projectId } = req.body;
-      
-      if (!prompt) {
-        return res.status(400).json({ error: 'Prompt is required' });
-      }
+ // User routes
+ app.get("/api/users/:id", isAuthenticated, async (req, res) => {
+   try {
+     const userId = parseInt(req.params.id);
+     const user = await storage.getUser(userId);
+     if (!user) {
+       return res.status(404).json({ error: "User not found" });
+     }
+     res.json(user);
+   } catch (error) {
+     console.error("Get user error:", error);
+     res.status(500).json({ error: "Failed to fetch user" });
+   }
+ });
 
-      // Generate code using OpenAI
-      const result = await generateCode({
-        prompt,
-        techStack,
-        projectType,
-        context
-      });
+ // Project routes
+ app.get("/api/projects", isAuthenticated, async (req, res) => {
+   try {
+     const userId = req.session.userId; // セッションからuserIdを取得
+     if (!userId) {
+       return res.status(400).json({ error: "User ID is required" });
+     }
 
-      // Save generated files to database if projectId is provided
-      if (projectId && result.files) {
-        for (const file of result.files) {
-          await storage.createGeneratedFile({
-            projectId: parseInt(projectId),
-            filename: file.filename,
-            filepath: file.filepath,
-            content: file.content,
-            fileType: file.fileType,
-          });
-        }
-      }
+     const projects = await storage.getProjectsByUser(userId);
+     res.json(projects);
+   } catch (error) {
+     console.error("Get projects error:", error);
+     res.status(500).json({ error: "Failed to fetch projects" });
+   }
+ });
 
-      res.json(result);
-    } catch (error) {
-      console.error('Code generation error:', error);
-      res.status(500).json({ 
-        error: 'Failed to generate code',
-        message: error instanceof Error ? error.message : 'Unknown error'
-      });
-    }
-  });
+ app.post("/api/projects", isAuthenticated, async (req, res) => {
+   try {
+     const projectData = insertProjectSchema.parse({
+       ...req.body,
+       userId: req.session.userId, // セッションからuserIdを設定
+     });
+     const project = await storage.createProject(projectData);
+     res.status(201).json(project);
+   } catch (error) {
+     if (error instanceof z.ZodError) {
+       return res
+         .status(400)
+         .json({ error: "Invalid project data", details: error.errors });
+     }
+     console.error("Create project error:", error);
+     res.status(500).json({ error: "Failed to create project" });
+   }
+ });
 
-  // Generated files routes
-  app.get('/api/projects/:projectId/files', async (req, res) => {
-    try {
-      const projectId = parseInt(req.params.projectId);
-      const files = await storage.getGeneratedFilesByProject(projectId);
-      res.json(files);
-    } catch (error) {
-      console.error('Get generated files error:', error);
-      res.status(500).json({ error: 'Failed to fetch generated files' });
-    }
-  });
+ app.get("/api/projects/:id", isAuthenticated, async (req, res) => {
+   try {
+     const projectId = parseInt(req.params.id);
+     const project = await storage.getProject(projectId);
+     if (!project) {
+       return res.status(404).json({ error: "Project not found" });
+     }
+     // プロジェクトの所有者であるか確認
+     if (project.userId !== req.session.userId) {
+       return res.status(403).json({ error: "Forbidden" });
+     }
+     res.json(project);
+   } catch (error) {
+     console.error("Get project error:", error);
+     res.status(500).json({ error: "Failed to fetch project" });
+   }
+ });
 
-  app.get('/api/files/:fileId', async (req, res) => {
-    try {
-      const fileId = parseInt(req.params.fileId);
-      const file = await storage.getGeneratedFile(fileId);
-      if (!file) {
-        return res.status(404).json({ error: 'File not found' });
-      }
-      res.json(file);
-    } catch (error) {
-      console.error('Get file error:', error);
-      res.status(500).json({ error: 'Failed to fetch file' });
-    }
-  });
+ app.put("/api/projects/:id", isAuthenticated, async (req, res) => {
+   try {
+     const projectId = parseInt(req.params.id);
+     const project = await storage.getProject(projectId);
+     if (!project) {
+       return res.status(404).json({ error: "Project not found" });
+     }
+     // プロジェクトの所有者であるか確認
+     if (project.userId !== req.session.userId) {
+       return res.status(403).json({ error: "Forbidden" });
+     }
 
-  // Download project as ZIP
-  app.get('/api/projects/:projectId/download', async (req, res) => {
-    try {
-      const projectId = parseInt(req.params.projectId);
-      const files = await storage.getGeneratedFilesByProject(projectId);
-      
-      if (files.length === 0) {
-        return res.status(404).json({ error: 'No files found for this project' });
-      }
+     const updates = req.body;
+     const updatedProject = await storage.updateProject(projectId, updates);
+     res.json(updatedProject);
+   } catch (error) {
+     console.error("Update project error:", error);
+     res.status(500).json({ error: "Failed to update project" });
+   }
+ });
 
-      // For now, return file list - in production, you'd create a ZIP file
-      res.json({
-        message: 'Project download ready',
-        files: files.map(f => ({
-          filename: f.filename,
-          filepath: f.filepath,
-          size: f.content.length
-        }))
-      });
-    } catch (error) {
-      console.error('Download project error:', error);
-      res.status(500).json({ error: 'Failed to prepare project download' });
-    }
-  });
+ // Chat session routes
+ app.get("/api/chat-sessions", isAuthenticated, async (req, res) => {
+   try {
+     const userId = req.session.userId; // セッションからuserIdを取得
+     if (!userId) {
+       return res.status(400).json({ error: "User ID is required" });
+     }
 
-  return httpServer;
+     const sessions = await storage.getChatSessionsByUser(userId);
+     res.json(sessions);
+   } catch (error) {
+     console.error("Get chat sessions error:", error);
+     res.status(500).json({ error: "Failed to fetch chat sessions" });
+   }
+ });
+
+ app.post("/api/chat-sessions", isAuthenticated, async (req, res) => {
+   try {
+     const sessionData = insertChatSessionSchema.parse({
+       ...req.body,
+       userId: req.session.userId, // セッションからuserIdを設定
+     });
+     const session = await storage.createChatSession(sessionData);
+     res.status(201).json(session);
+   } catch (error) {
+     if (error instanceof z.ZodError) {
+       return res
+         .status(400)
+         .json({ error: "Invalid session data", details: error.errors });
+     }
+     console.error("Create chat session error:", error);
+     res.status(500).json({ error: "Failed to create chat session" });
+   }
+ });
+
+ // Chat message routes
+ app.get(
+   "/api/chat-sessions/:sessionId/messages",
+   isAuthenticated,
+   async (req, res) => {
+     try {
+       const sessionId = parseInt(req.params.sessionId);
+       const session = await storage.getChatSession(sessionId);
+       if (!session) {
+         return res.status(404).json({ error: "Chat session not found" });
+       }
+       // セッションの所有者であるか確認
+       if (session.userId !== req.session.userId) {
+         return res.status(403).json({ error: "Forbidden" });
+       }
+
+       const messages = await storage.getChatMessagesBySession(sessionId);
+       res.json(messages);
+     } catch (error) {
+       console.error("Get chat messages error:", error);
+       res.status(500).json({ error: "Failed to fetch chat messages" });
+     }
+   }
+ );
+
+ app.post(
+   "/api/chat-sessions/:sessionId/messages",
+   isAuthenticated,
+   async (req, res) => {
+     try {
+       const sessionId = parseInt(req.params.sessionId);
+       const session = await storage.getChatSession(sessionId);
+       if (!session) {
+         return res.status(404).json({ error: "Chat session not found" });
+       }
+       // セッションの所有者であるか確認
+       if (session.userId !== req.session.userId) {
+         return res.status(403).json({ error: "Forbidden" });
+       }
+
+       const messageData = insertChatMessageSchema.parse({
+         ...req.body,
+         sessionId,
+       });
+
+       const message = await storage.createChatMessage(messageData);
+       res.status(201).json(message);
+     } catch (error) {
+       if (error instanceof z.ZodError) {
+         return res
+           .status(400)
+           .json({ error: "Invalid message data", details: error.errors });
+       }
+       console.error("Create chat message error:", error);
+       res.status(500).json({ error: "Failed to create chat message" });
+     }
+   }
+ );
+
+ // Code generation endpoint
+ app.post("/api/generate-code", isAuthenticated, async (req, res) => {
+   try {
+     const { prompt, techStack, projectType, context, projectId } = req.body;
+
+     if (!prompt) {
+       return res.status(400).json({ error: "Prompt is required" });
+     }
+
+     // Generate code using OpenAI
+     const result = await generateCode({
+       prompt,
+       techStack,
+       projectType,
+       context,
+     });
+
+     // Save generated files to database if projectId is provided
+     if (projectId && result.files) {
+       for (const file of result.files) {
+         await storage.createGeneratedFile({
+           projectId: parseInt(projectId),
+           filename: file.filename,
+           filepath: file.filepath,
+           content: file.content,
+           fileType: file.fileType,
+         });
+       }
+     }
+
+     res.json(result);
+   } catch (error) {
+     console.error("Code generation error:", error);
+     res.status(500).json({
+       error: "Failed to generate code",
+       message: error instanceof Error ? error.message : "Unknown error",
+     });
+   }
+ });
+
+ // Generated files routes
+ app.get("/api/projects/:projectId/files", isAuthenticated, async (req, res) => {
+   try {
+     const projectId = parseInt(req.params.projectId);
+     const project = await storage.getProject(projectId);
+     if (!project) {
+       return res.status(404).json({ error: "Project not found" });
+     }
+     // プロジェクトの所有者であるか確認
+     if (project.userId !== req.session.userId) {
+       return res.status(403).json({ error: "Forbidden" });
+     }
+
+     const files = await storage.getGeneratedFilesByProject(projectId);
+     res.json(files);
+   } catch (error) {
+     console.error("Get generated files error:", error);
+     res.status(500).json({ error: "Failed to fetch generated files" });
+   }
+ });
+
+ app.get("/api/files/:fileId", isAuthenticated, async (req, res) => {
+   try {
+     const fileId = parseInt(req.params.fileId);
+     const file = await storage.getGeneratedFile(fileId);
+     if (!file) {
+       return res.status(404).json({ error: "File not found" });
+     }
+     // ファイルが属するプロジェクトの所有者であるか確認
+     const project = await storage.getProject(file.projectId);
+     if (!project || project.userId !== req.session.userId) {
+       return res.status(403).json({ error: "Forbidden" });
+     }
+
+     res.json(file);
+   } catch (error) {
+     console.error("Get file error:", error);
+     res.status(500).json({ error: "Failed to fetch file" });
+   }
+ });
+
+ // Download project as ZIP
+ app.get("/api/projects/:projectId/download", isAuthenticated, async (req, res) => {
+   try {
+     const projectId = parseInt(req.params.projectId);
+     const project = await storage.getProject(projectId);
+     if (!project) {
+       return res.status(404).json({ error: "Project not found" });
+     }
+     // プロジェクトの所有者であるか確認
+     if (project.userId !== req.session.userId) {
+       return res.status(403).json({ error: "Forbidden" });
+     }
+
+     const files = await storage.getGeneratedFilesByProject(projectId);
+
+     if (files.length === 0) {
+       return res.status(404).json({ error: "No files found for this project" });
+     }
+
+     // For now, return file list - in production, you'd create a ZIP file
+     res.json({
+       message: "Project download ready",
+       files: files.map((f) => ({
+         filename: f.filename,
+         filepath: f.filepath,
+         size: f.content.length,
+       })),
+     });
+   } catch (error) {
+     console.error("Download project error:", error);
+     res.status(500).json({ error: "Failed to prepare project download" });
+   }
+ });
+
+ return httpServer;
 }

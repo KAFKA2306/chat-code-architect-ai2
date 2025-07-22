@@ -1,11 +1,22 @@
 import express, { type Request, Response, NextFunction } from "express";
 import http from 'http';
+import session from "express-session"; // express-sessionをインポート
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+
+// セッションミドルウェアの追加
+app.use(
+  session({
+    secret: process.env.SESSION_SECRET || "supersecret", // 環境変数からシークレットを取得
+    resave: false,
+    saveUninitialized: false,
+    cookie: { secure: app.get("env") === "production" }, // 本番環境ではHTTPSを要求
+  })
+);
 
 app.use((req, res, next) => {
   const start = Date.now();
