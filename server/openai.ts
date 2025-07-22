@@ -1,9 +1,7 @@
-import OpenAI from "openai";
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
-// the newest OpenAI model is "gpt-4o" which was released May 13, 2024. do not change this unless explicitly requested by the user
-const openai = new OpenAI({ 
-  apiKey: process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY_ENV_VAR || "default_key"
-});
+// the newest Gemini model is "gemini-pro". do not change this unless explicitly requested by the user
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "default_key");
 
 export interface CodeGenerationRequest {
   prompt: string;
@@ -66,61 +64,36 @@ export async function generateCode(request: CodeGenerationRequest): Promise<Code
     Project type: ${request.projectType || 'Backend API'}
     Additional context: ${request.context || 'None'}`;
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content: systemPrompt
-        },
-        {
-          role: "user",
-          content: request.prompt
-        }
-      ],
-      response_format: { type: "json_object" },
-      temperature: 0.7,
-      max_tokens: 4000
+    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+    const result = await model.generateContent({
+      contents: [{ role: "user", parts: [{ text: systemPrompt }, { text: request.prompt }] }],
+      generationConfig: { responseMimeType: "application/json" }
     });
 
-    const result = JSON.parse(response.choices[0].message.content || '{}');
+    const parsedResult = JSON.parse(result.response.text() || '{}');
     
     return {
-      content: result.content || "Code generation completed",
-      files: result.files || [],
-      actions: result.actions || [],
+      content: parsedResult.content || "Code generation completed",
+      files: parsedResult.files || [],
+      actions: parsedResult.actions || [],
       status: 'completed'
     };
   } catch (error) {
-    console.error('OpenAI API error:', error);
+    console.error('Gemini API error:', error);
     throw new Error(`Failed to generate code: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }
 
 export async function generateChatResponse(message: string, context?: string): Promise<string> {
   try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content: `You are Claude Code Architect, a helpful AI assistant specialized in backend development. 
-          You help users plan, design, and build backend applications using modern technologies.
-          Be conversational, helpful, and technical when appropriate.
-          Context: ${context || 'General chat about backend development'}`
-        },
-        {
-          role: "user",
-          content: message
-        }
-      ],
-      temperature: 0.8,
-      max_tokens: 1000
+    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
+    const result = await model.generateContent({
+      contents: [{ role: "user", parts: [{ text: `You are Claude Code Architect, a helpful AI assistant specialized in backend development. You help users plan, design, and build backend applications using modern technologies. Be conversational, helpful, and technical when appropriate. Context: ${context || 'General chat about backend development'}` }, { text: message }] }]
     });
 
-    return response.choices[0].message.content || "I apologize, but I couldn't generate a response. Please try again.";
+    return result.response.text() || "I apologize, but I couldn't generate a response. Please try again.";
   } catch (error) {
-    console.error('OpenAI chat error:', error);
+    console.error('Gemini chat error:', error);
     return "I'm experiencing some technical difficulties. Please try again in a moment.";
   }
 }
