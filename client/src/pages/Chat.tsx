@@ -56,9 +56,8 @@ export default function Chat() {
   const { sendMessage, isConnected } = useWebSocket('/ws');
 
 // 認証済みユーザーIDを管理
-const [currentUserId, setCurrentUserId] = useState<number | null>(null);
-
 export default function Chat() {
+  const [currentUserId, setCurrentUserId] = useState<number | null>(null);
  const { sessionId } = useParams();
  const { toast } = useToast();
  const scrollAreaRef = useRef<HTMLDivElement>(null);
