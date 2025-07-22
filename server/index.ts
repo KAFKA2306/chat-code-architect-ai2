@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express, { type Request, Response, NextFunction } from "express";
 import http from 'http';
 import session from "express-session"; // express-sessionをインポート
