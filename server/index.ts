@@ -77,5 +77,30 @@ app.use((req, res, next) => {
   const port = parseInt(process.env.PORT || '5000', 10);
   server.listen(port, '0.0.0.0', () => {
     log(`serving on port ${port}`);
+    
+    // Show URLs to access the application
+    console.log('\n🚀 Application is running!');
+    console.log(`📱 Local:            http://localhost:${port}`);
+    console.log(`🌐 Network:          http://0.0.0.0:${port}`);
+    
+    // If running on Replit, show the Replit URL
+    if (process.env.REPL_SLUG && process.env.REPL_OWNER) {
+      console.log(`🔗 Replit:           https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`);
+    }
+    
+    // If running on other platforms, show generic external URL
+    if (process.env.RAILWAY_PUBLIC_DOMAIN) {
+      console.log(`🚄 Railway:          https://${process.env.RAILWAY_PUBLIC_DOMAIN}`);
+    }
+    
+    if (process.env.VERCEL_URL) {
+      console.log(`▲ Vercel:            https://${process.env.VERCEL_URL}`);
+    }
+    
+    console.log('\n📋 API Endpoints:');
+    console.log(`   Health Check:     http://localhost:${port}/api/health`);
+    console.log(`   Chat Sessions:    http://localhost:${port}/api/chat-sessions`);
+    console.log(`   Projects:         http://localhost:${port}/api/projects`);
+    console.log('');
   });
 })();
