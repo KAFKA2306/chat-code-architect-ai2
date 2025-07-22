@@ -7,6 +7,7 @@ This is a full-stack web application that uses AI to generate production-ready b
 ## User Preferences
 
 Preferred communication style: Simple, everyday language.
+Documentation language: Japanese (for all user-facing documentation).
 
 ## System Architecture
 
